@@ -4,7 +4,6 @@ import os
 from Cryptodome.Cipher import AES
 from Cryptodome.Protocol.KDF import PBKDF2
 from Cryptodome.Random import get_random_bytes
-from Cryptodome.Util.Padding import pad, unpad
 
 
 class AESAppUI:
