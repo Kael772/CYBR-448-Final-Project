@@ -13,7 +13,7 @@ class AESAppUI:
         self.root.title("AES File Tool")
         self.root.geometry("700x600")
 
-        # ---------------- AES MODE ----------------
+
         self.aes_mode = tk.StringVar(value="128")
 
         mode_frame = ttk.LabelFrame(root, text="AES Mode")
@@ -23,7 +23,7 @@ class AESAppUI:
         ttk.Radiobutton(mode_frame, text="AES-192", variable=self.aes_mode, value="192").pack(side="left", padx=10)
         ttk.Radiobutton(mode_frame, text="AES-256", variable=self.aes_mode, value="256").pack(side="left", padx=10)
 
-        # ---------------- KEY OPTIONS ----------------
+
         key_frame = ttk.LabelFrame(root, text="Key Options")
         key_frame.pack(fill="x", padx=10, pady=5)
 
@@ -41,7 +41,7 @@ class AESAppUI:
         self.password_entry = ttk.Entry(row, state="disabled", width=30)
         self.password_entry.pack(side="left", padx=10)
 
-        # key display
+
         key_row = ttk.Frame(key_frame)
         key_row.pack(fill="x", pady=5)
 
@@ -52,7 +52,7 @@ class AESAppUI:
         ttk.Button(key_row, text="Generate Key", command=self.generate_key_ui).pack(side="left", padx=5)
         ttk.Button(key_row, text="Copy Key", command=self.copy_key).pack(side="left", padx=5)
 
-        # ---------------- FILES ----------------
+
         file_frame = ttk.LabelFrame(root, text="Files")
         file_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -67,14 +67,13 @@ class AESAppUI:
         self.file_list = tk.Listbox(file_frame, height=12, selectmode=tk.EXTENDED)
         self.file_list.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # ---------------- ACTIONS ----------------
+
         action = ttk.Frame(root)
         action.pack(fill="x", padx=10, pady=10)
 
         ttk.Button(action, text="Encrypt", command=self.encrypt_ui).pack(side="left", padx=10)
         ttk.Button(action, text="Decrypt", command=self.decrypt_ui).pack(side="left", padx=10)
 
-        # ---------------- DECRYPT ----------------
         decrypt_frame = ttk.LabelFrame(root, text="Decrypt Input")
         decrypt_frame.pack(fill="x", padx=10, pady=5)
 
@@ -92,14 +91,14 @@ class AESAppUI:
         self.key_status = ttk.Label(decrypt_frame, text="")
         self.key_status.pack(side="left", padx=10)
 
-        # ---------------- STATUS PANEL ----------------
+
         status_frame = ttk.LabelFrame(root, text="Status Log")
         status_frame.pack(fill="both", expand=False, padx=10, pady=5)
 
         self.status_box = tk.Text(status_frame, height=8, wrap="word", state="disabled")
         self.status_box.pack(fill="both", expand=True)
 
-    # ---------------- STATUS SYSTEM ----------------
+
     def set_status(self, msg, level="INFO"):
         self.status_box.config(state="normal")
 
@@ -112,14 +111,13 @@ class AESAppUI:
         self.status_box.insert(tk.END, prefix + msg + "\n")
         self.status_box.see(tk.END)
 
-        # auto-clear after ~50 lines
         lines = int(self.status_box.index('end-1c').split('.')[0])
         if lines > 50:
             self.status_box.delete("1.0", "10.0")
 
         self.status_box.config(state="disabled")
 
-    # ---------------- UI ----------------
+
     def toggle_password(self):
         if self.key_mode.get() == "password":
             self.password_entry.config(state="normal")
@@ -131,12 +129,15 @@ class AESAppUI:
         self.decrypt_entry.delete(0, tk.END)
 
     def add_files(self):
+        file_added = False
         paths = filedialog.askopenfilenames()
         for p in paths:
             if p not in self.file_list.get(0, tk.END):
                 self.file_list.insert(tk.END, p)
+                file_added = True
 
-        self.set_status("Files added")
+        if file_added:
+            self.set_status("Files added")
 
     def add_folder(self):
         folder = filedialog.askdirectory()
@@ -162,49 +163,63 @@ class AESAppUI:
         self.file_list.delete(0, tk.END)
         self.set_status("All files cleared")
 
-    # ---------------- CRYPTO ----------------
-    def encrypt_file(self, file_path, key):
+    def encrypt_file(self, file_path, password):
         if not os.path.isfile(file_path):
-            self.set_status(f"Skipping folder: {file_path}", "INFO")
+            self.set_status(f"Skipping folder: {file_path}")
             return
 
-        with open(file_path, "rb") as f:
-            data = f.read()
+        with open(file_path, "rb") as file:
+            data = file.read()
 
-        cipher = AES.new(key, AES.MODE_CBC)
-        ciphertext = cipher.encrypt(pad(data, AES.block_size))
+        key_len = int(self.aes_mode.get()) // 8
+        salt = get_random_bytes(16)
 
-        out = file_path + ".enc"
+        key = PBKDF2(
+            password.encode(),
+            salt,
+            dkLen=key_len,
+            count=200000
+        )
 
-        with open(out, "wb") as f:
-            f.write(cipher.iv + ciphertext)
+        cipher = AES.new(key, AES.MODE_GCM)
+        ciphertext, tag = cipher.encrypt_and_digest(data)
 
-        self.set_status(f"Encrypted {file_path}", "SUCCESS")
+        with open(file_path + ".enc", "wb") as file:
+            file.write(salt + cipher.nonce + tag + ciphertext)
 
-    def decrypt_file(self, file_path, key):
+        self.set_status(f"Encrypted: {file_path}")
+
+    def decrypt_file(self, file_path, password):
         try:
-            with open(file_path, "rb") as f:
-                raw = f.read()
+            with open(file_path, "rb") as file:
+                raw = file.read()
 
-            if len(raw) <= 16:
-                self.set_status(f"Skipping invalid: {file_path}", "ERROR")
-                return
+            salt = raw[:16]
+            nonce = raw[16:32]
+            tag = raw[32:48]
+            ciphertext = raw[48:]
 
-            iv = raw[:16]
-            cipher = AES.new(key, AES.MODE_CBC, iv=iv)
-            plaintext = unpad(cipher.decrypt(raw[16:]), AES.block_size)
+            key_len = int(self.aes_mode.get()) // 8
 
-            out = file_path.replace(".enc", "")
+            key = PBKDF2(
+                password.encode(),
+                salt,
+                dkLen=key_len,
+                count=200000
+            )
 
-            with open(out, "wb") as f:
-                f.write(plaintext)
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            plaintext = cipher.decrypt_and_verify(ciphertext, tag)
 
-            self.set_status(f"Decrypted {file_path}", "SUCCESS")
+            with open(file_path.replace(".enc", ""), "wb") as file:
+                file.write(plaintext)
+
+            self.set_status(f"Decrypted: {file_path}")
 
         except Exception:
-            self.set_status(f"Failed decrypt: {file_path}", "ERROR")
+            self.set_status(f"Failed: {file_path}", "ERROR")
 
-    # ---------------- KEY ----------------
+
     def generate_key_ui(self):
         key = get_random_bytes(int(self.aes_mode.get()) // 8)
 
@@ -243,35 +258,39 @@ class AESAppUI:
         mode = self.key_mode.get()
 
         if mode == "generate":
-            return self.validate_hex_key(self.key_output.get())
+            key = self.validate_hex_key(self.key_output.get())
+            if not key:
+                self.set_status("Invalid generated key", "ERROR")
+            return key
 
-        if mode == "password":
-            pw = self.password_entry.get()
+        elif mode == "password":
+            pw = self.password_entry.get().strip()
             if not pw:
+                self.set_status("Password required", "ERROR")
                 return None
 
-            return PBKDF2(
-                pw.encode(),
-                b"static_salt_demo",
-                dkLen=int(self.aes_mode.get()) // 8,
-                count=200000
-            )
+            return pw.encode()
 
         return None
 
-    # ---------------- ACTIONS ----------------
     def encrypt_ui(self):
         if not self.file_list.get(0):
             self.set_status("No files selected", "ERROR")
             return
 
-        key = self.get_encryption_key()
-        if not key:
-            self.set_status("Invalid key", "ERROR")
+        mode = self.key_mode.get()
+
+        if mode == "password":
+            password = self.password_entry.get()
+        else:
+            password = self.key_output.get()
+
+        if not password:
+            self.set_status("No password/key provided", "ERROR")
             return
 
-        for f in self.file_list.get(0, tk.END):
-            self.encrypt_file(f, key)
+        for file in self.file_list.get(0, tk.END):
+            self.encrypt_file(file, password)
 
     def decrypt_ui(self):
         if not self.file_list.get(0):
@@ -281,28 +300,16 @@ class AESAppUI:
         mode = self.decrypt_mode.get()
 
         if mode == "password":
-            pw = self.decrypt_entry.get()
-            if not pw:
-                self.set_status("Password required", "ERROR")
-                return
-
-            key = PBKDF2(
-                pw.encode(),
-                b"static_salt_demo",
-                dkLen=int(self.aes_mode.get()) // 8,
-                count=200000
-            )
+            password = self.decrypt_entry.get()
         else:
-            key = self.validate_hex_key(self.decrypt_entry.get())
+            password = self.decrypt_entry.get()
 
-            if not key:
-                self.set_status("Invalid key", "ERROR")
-                return
+        if not password:
+            self.set_status("No password/key provided", "ERROR")
+            return
 
-        for f in self.file_list.get(0, tk.END):
-            self.decrypt_file(f, key)
-
-        self.set_status("Decrypt complete", "SUCCESS")
+        for file in self.file_list.get(0, tk.END):
+            self.decrypt_file(file, password)
 
 
 if __name__ == "__main__":
